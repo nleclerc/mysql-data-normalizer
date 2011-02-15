@@ -7,6 +7,15 @@ class EzPDO extends PDO {
 		$this->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);	
 		$this->exec('SET CHARACTER SET '.$dbconf->charset);
 	}
+
+	public function prepare($sql, $options=NULL) {
+		$statement = parent::prepare($sql);
+		
+		if(preg_match('/^\s*select\s/i', $sql))
+			$statement->setFetchMode(PDO::FETCH_OBJ);
+		
+		return $statement;
+	}
 	
 	public function getRow($sqlQuery, $parms=null) {
 		$stm = $this->prepare($sqlQuery);

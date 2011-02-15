@@ -23,22 +23,36 @@ class DataFilter {
 		puts("=========================================");
 		puts("Processing DB: ".$this->getDbAddress($this->conf->source).' -> '.$this->getDbAddress($this->conf->destination));
 		
-		foreach ($this->conf->tables as $name => $tableConf)
-			$this->processTable($name, $tableConf);
+		$tables = $this->listTables();
+		
+		foreach ($tables as $name)
+			$this->processTable($name);
+	}
+	
+	private function listTables() {
+		$result = $this->source->getList('show tables');
+		$tables = array();
+		
+		for ($i=0; $i<count($result); $i++)
+			array_push($tables, $result[$i][0]);
+		
+		return $tables;
 	}
 	
 	private function truncateTable($pdo, $tablename) {
 		return $pdo->execute("TRUNCATE TABLE $tablename");
 	}
 	
-	private function getColumnNames($pdoStatement) {
+	private function getColumnNames($pdoStatement, $type=null) {
 		$colCount = $pdoStatement->columnCount();
 		
 		$names = array();
 		
 		for ($i=0; $i<$colCount; $i++) {
 			$colMetadata = $pdoStatement->getColumnMeta($i);
-			array_push($names, $colMetadata['name']);
+			
+			if (!$type || isset($colMetadata['native_type']) && $colMetadata['native_type'] == $type)
+				array_push($names, $colMetadata['name']);
 		}
 		
 		return $names;
@@ -67,7 +81,7 @@ class DataFilter {
 		return $rowValues;
 	}
 	
-	private function processTable($name, $conf) {
+	private function processTable($name) {
 		puts("-----");
 		puts("Processing table: $name");
 		
@@ -80,49 +94,43 @@ class DataFilter {
 			puts("Truncated destination table.");
 		else
 			puts("An error occured truncating destination table.");
-		
-		$colNames = $this->getColumnNames($stm);
-		$insertStm = $this->prepareInsertStatement($this->dest, $name, $colNames);
-		
-		for ($i=0; $i<$count; $i++) {
-//		for ($i=0; $i<10; $i++) {
-			$row = $stm->fetchObject();
 			
-			foreach ($conf as $colname => $filters)
-				$row = $this->filterColumn($row, $colname, explode(',', $filters));
+		$strCols = $this->getColumnNames($stm, 'VAR_STRING');
+		$allCols = $this->getColumnNames($stm);
+		
+		puts("Table columns: ".implode(', ', $allCols));
+		puts("Filtered columns: ".implode(', ', $strCols));
 			
-			if (!$insertStm->execute($this->getRowValues($row, $colNames)))
+		$insertStm = $this->prepareInsertStatement($this->dest, $name, $allCols);
+		
+//		for ($i=0; $i<$count; $i++) {
+		for ($i=0; $i<min($count, 10); $i++) {
+			$row = $stm->fetch(PDO::FETCH_OBJ);
+			
+			foreach ($strCols as $colname) {
+				$row->$colname = $this->filterValue($row->$colname);
+			}
+			
+			var_dump($row);
+			puts(implode(', ', $this->getRowValues($row, $allCols)));
+			
+			if (!$insertStm->execute($this->getRowValues($row, $allCols)))
 				throw new Exception('Unable to insert row: '.json_encode($row));
 		}
 		
 		puts("All rows inserted.");
 	}
 	
-	private function filterColumn($row, $colname, $filters) {
-		if (!$filters)
-			return $row;
+	private function filterValue($value) {
+		// If not a url and urlencoded then decode.
+		if (!preg_match('/[a-z]+:\/\//i', $value) &&
+				(preg_match('/%[0-9A-F]{2}/i', $value) || preg_match('/\+/', $value) && preg_match('/^\S+$/', $value)))
+			$value = iconv("iso-8859-15", "utf-8", urldecode($value));
 		
-		$value = $row->$colname;
+		// Strip backslashes if there are any.
+		while (preg_match('/\\\\/', $value)) // quad backslash because regex parser needs 2.
+			$value = stripcslashes($value);
 		
-		switch (array_shift($filters)) {
-			case 'stripcslashes':
-				// check if there is actualy a backslash in the string.
-				if (preg_match('/\\\\/', $value)) // quad backslash because regex parser needs 2.
-					$value = stripcslashes($value);
-				break;
-			
-			case 'urldecode':
-				// check if string is actually urlencoded since data might not be consistent.
-				if (preg_match('/%[0-9A-F]{2}/i', $value) || preg_match('/\+/', $value) && preg_match('/^\S+$/', $value))
-					$value = iconv("iso-8859-15", "utf-8", urldecode($row->$colname));
-				break;
-		}
-		
-		$row->$colname = $value;
-		
-		if (preg_match('/\/n/', $value))
-			puts(json_encode($row));
-		
-		return $this->filterColumn($row, $colname, $filters);
+		return $value;
 	}
 }

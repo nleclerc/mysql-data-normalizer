@@ -1,0 +1,17 @@
+{
+	"source":{
+		"host":"",
+		"database":"",
+		"user":"",
+		"password":"",
+		"charset":"UTF8"
+	},
+	
+	"destination":{
+		"host":"",
+		"database":"",
+		"user":"",
+		"password":"",
+		"charset":"UTF8"
+	}
+}
