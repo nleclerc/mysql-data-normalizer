@@ -43,15 +43,18 @@ class DataFilter {
 		return $pdo->execute("TRUNCATE TABLE $tablename");
 	}
 	
-	private function getColumnNames($pdoStatement, $type=null) {
+	private function getColumnNames($pdoStatement) {
 		$colCount = $pdoStatement->columnCount();
+		$types = array_slice(func_get_args(), 1);
 		
 		$names = array();
 		
 		for ($i=0; $i<$colCount; $i++) {
 			$colMetadata = $pdoStatement->getColumnMeta($i);
 			
-			if (!$type || isset($colMetadata['native_type']) && $colMetadata['native_type'] == $type)
+//			puts("##### ".json_encode($colMetadata));
+			
+			if (!$types || isset($colMetadata['native_type']) && in_array($colMetadata['native_type'], $types))
 				array_push($names, $colMetadata['name']);
 		}
 		
@@ -59,7 +62,7 @@ class DataFilter {
 	}
 	
 	private function prepareInsertStatement($pdo, $tableName, $colNames) {
-		$query = "INSERT INTO $tableName (".implode(', ', $colNames).') VALUES (';
+		$query = "INSERT INTO $tableName (`".implode("`, `", $colNames)."`) VALUES (";
 		for ($i=0; $i<count($colNames); $i++) {
 			if ($i>0)
 				$query.=', ';
@@ -75,8 +78,7 @@ class DataFilter {
 	private function getRowValues($row, $colNames) {
 		$rowValues = array();
 		for ($i=0; $i<count($colNames); $i++) {
-			$currentCol = $colNames[$i];
-			array_push($rowValues, $row->$currentCol);
+			array_push($rowValues, $row[$colNames[$i]]);
 		}
 		return $rowValues;
 	}
@@ -95,7 +97,7 @@ class DataFilter {
 		else
 			puts("An error occured truncating destination table.");
 			
-		$strCols = $this->getColumnNames($stm, 'VAR_STRING');
+		$strCols = $this->getColumnNames($stm, 'VAR_STRING', 'BLOB', 'TEXT');
 		$allCols = $this->getColumnNames($stm);
 		
 		puts("Table columns: ".implode(', ', $allCols));
@@ -103,19 +105,27 @@ class DataFilter {
 			
 		$insertStm = $this->prepareInsertStatement($this->dest, $name, $allCols);
 		
-//		for ($i=0; $i<$count; $i++) {
-		for ($i=0; $i<min($count, 10); $i++) {
-			$row = $stm->fetch(PDO::FETCH_OBJ);
+		for ($i=0; $i<$count; $i++) {
+//		for ($i=0; $i<min($count, 10); $i++) {
+
+			echo '- ';
+			$row = $stm->fetch(PDO::FETCH_BOTH);
+			
+			echo $row[0];
+			echo ' | ';
 			
 			foreach ($strCols as $colname) {
-				$row->$colname = $this->filterValue($row->$colname);
+				$row[$colname] = $this->filterValue($row[$colname]);
+				echo substr($row[$colname], 0, 10);
+				echo ' | ';
 			}
 			
-			var_dump($row);
-			puts(implode(', ', $this->getRowValues($row, $allCols)));
+//			puts(implode(', ', $this->getRowValues($row, $allCols)));
 			
 			if (!$insertStm->execute($this->getRowValues($row, $allCols)))
 				throw new Exception('Unable to insert row: '.json_encode($row));
+			
+			puts (' ;');
 		}
 		
 		puts("All rows inserted.");
@@ -123,13 +133,28 @@ class DataFilter {
 	
 	private function filterValue($value) {
 		// If not a url and urlencoded then decode.
-		if (!preg_match('/[a-z]+:\/\//i', $value) &&
-				(preg_match('/%[0-9A-F]{2}/i', $value) || preg_match('/\+/', $value) && preg_match('/^\S+$/', $value)))
-			$value = iconv("iso-8859-15", "utf-8", urldecode($value));
+		if (!preg_match('/^[a-z]+:\/\//i', $value) && preg_match('/^\S+$/', $value) &&
+				(preg_match('/%[0-9A-F]{2}/i', $value) || preg_match('/\+/', $value))) {
+					$value = urldecode($value);
+					
+					$currentEncoding = mb_detect_encoding($value, 'UTF-8, ISO-8859-1', true);
+					
+//					puts("@@@@@ $currentEncoding -- $value >>>>> ".iconv($currentEncoding, "utf-8", $value));
+					
+					if ($currentEncoding != 'UTF-8')
+						$value = iconv($currentEncoding, "utf-8", $value);
+				}
 		
 		// Strip backslashes if there are any.
-		while (preg_match('/\\\\/', $value)) // quad backslash because regex parser needs 2.
-			$value = stripcslashes($value);
+		while (preg_match('/\\\\/', $value)) { // quad backslash because regex parser needs 2.
+			$strippedValue = stripcslashes($value);
+			
+			// must test if changed anything to avoid infinite loop.
+			if ($strippedValue == $value)
+				break;
+			
+			$value = $strippedValue;
+		}
 		
 		return $value;
 	}
